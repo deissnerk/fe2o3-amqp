@@ -227,21 +227,28 @@ impl SessionAcceptor {
         incoming_session: IncomingSession,
         connection: &mut ListenerConnectionHandle,
     ) -> Result<ListenerSessionHandle, BeginError> {
+        let IncomingSession {
+            channel,
+            begin,
+            incoming_tx,
+            incoming_rx,
+        } = incoming_session;
+
         let local_state = SessionState::Unmapped;
         let (session_control_tx, session_control_rx) =
             mpsc::channel::<SessionControl>(DEFAULT_SESSION_CONTROL_BUFFER_SIZE);
-        let (incoming_tx, incoming_rx) = mpsc::channel(self.0.buffer_size);
         let (outgoing_tx, outgoing_rx) = mpsc::channel(self.0.buffer_size);
         let (link_listener_tx, link_listener_rx) = mpsc::channel(self.0.buffer_size);
 
-        // create session in connection::Engine
+        // Register the pre-allocated sender in session_by_outgoing_channel.
+        // The same sender is already in session_by_incoming_channel (registered
+        // by the connection engine in on_incoming_begin), so pipelined frames
+        // arriving before this point are buffered in incoming_rx.
         let outgoing_channel = match connection.allocate_session(incoming_tx).await {
-            Ok(channel) => channel,
+            Ok(ch) => ch,
             Err(error) => match error {
                 AllocSessionError::IllegalState => return Err(BeginError::IllegalConnectionState),
                 AllocSessionError::ChannelMaxReached => {
-                    // A peer that receives a channel number outside the supported range MUST close the connection
-                    // with the framing-error error-code
                     let error = definitions::Error::new(
                         ConnectionError::FramingError,
                         "Exceeding channel-max".to_string(),
@@ -258,10 +265,7 @@ impl SessionAcceptor {
             },
         };
         let mut session = self.0.clone().into_session(outgoing_channel, local_state);
-        session.on_incoming_begin(
-            IncomingChannel(incoming_session.channel),
-            incoming_session.begin,
-        )?;
+        session.on_incoming_begin(IncomingChannel(channel), begin)?;
 
         let listener_session = ListenerSession {
             session,

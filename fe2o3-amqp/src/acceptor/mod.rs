@@ -17,6 +17,9 @@ use fe2o3_amqp_types::{
     definitions::{ReceiverSettleMode, SenderSettleMode},
     performatives::Begin,
 };
+use tokio::sync::mpsc;
+
+use crate::session::frame::SessionIncomingItem;
 
 pub use self::connection::{ConnectionAcceptor, ListenerConnectionHandle};
 pub use self::link::{LinkAcceptor, LinkEndpoint};
@@ -31,6 +34,16 @@ pub struct IncomingSession {
 
     /// The Begin performative sent by the remote peer
     pub begin: Begin,
+
+    /// Pre-allocated sender for session frames, already registered in the
+    /// connection engine's `session_by_incoming_channel` map. This ensures
+    /// that pipelined frames (e.g. Attach) arriving before the session is
+    /// fully accepted can be routed correctly.
+    pub(crate) incoming_tx: mpsc::Sender<SessionIncomingItem>,
+
+    /// The receiving end of the pre-allocated session frame channel.
+    /// The session engine should use this to receive incoming frames.
+    pub(crate) incoming_rx: mpsc::Receiver<SessionIncomingItem>,
 }
 
 /// The supported sender-settle-modes for the link acceptor

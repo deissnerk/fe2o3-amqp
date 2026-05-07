@@ -520,20 +520,23 @@ impl endpoint::Connection for ListenerConnection {
                 relay.send(sframe).await?;
             }
             None => {
-                // If a session is locally initiated, the remote-channel MUST NOT be set. When an endpoint responds
-                // to a remotely initiated session, the remote-channel MUST be set to the channel on which the
-                // remote session sent the begin.
+                // Remotely initiated session: the remote-channel is not set.
+                // Pre-allocate the session frame channel and register it in
+                // session_by_incoming_channel NOW, before yielding control.
+                // This prevents a race condition where pipelined frames (Attach)
+                // arrive before the session acceptor has a chance to register.
+                use std::sync::Arc;
+                let (incoming_tx, incoming_rx) = mpsc::channel(self.connection.session_by_outgoing_channel.capacity().max(256));
+                let relay = Arc::new(incoming_tx.clone());
+                self.connection
+                    .session_by_incoming_channel
+                    .insert(channel, relay);
 
-                // Upon receiving the
-                // begin the partner will check the remote-channel field and find it empty. This indicates that the begin is referring to
-                // remotely initiated session. The partner will therefore allocate an unused outgoing channel for the remotely initiated
-                // session and indicate this by sending its own begin setting the remote-channel field to the incoming channel of the
-                // remotely initiated session
-
-                // Here we will send the begin frame out to get processed
                 let incoming_session = IncomingSession {
                     channel: channel.0,
                     begin,
+                    incoming_tx,
+                    incoming_rx,
                 };
                 self.session_listener
                     .send(incoming_session)
